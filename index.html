@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>開発メモ / TODOボード</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f5f5f2;--card:#fff;--tx:#222;--sub:#777;--bd:#ddd;--ac:#3b6fd4;--bug:#d9534f;--idea:#e0a100;--todo:#3b6fd4;--note:#6a8f3a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1c1e;--card:#27282b;--tx:#eee;--sub:#999;--bd:#3a3b3f;--ac:#7aa2f7}}
+:root[data-theme="dark"]{--bg:#1b1c1e;--card:#27282b;--tx:#eee;--sub:#999;--bd:#3a3b3f;--ac:#7aa2f7}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;padding:12px}
+h1{font-size:18px;margin:0 0 10px}
+.panel{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:12px}
+input,select,textarea,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:6px 8px;max-width:100%}
+textarea{width:100%;resize:vertical}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.row>input[type=text]{flex:1;min-width:140px}
+button{cursor:pointer}
+button.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:700px){.board{grid-template-columns:1fr}}
+.col h2{font-size:14px;margin:0 0 6px;color:var(--sub)}
+.card{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:8px;padding:8px;margin-bottom:8px}
+.card.bug{border-left-color:var(--bug)}.card.idea{border-left-color:var(--idea)}.card.note{border-left-color:var(--note)}
+.t{font-weight:600;word-break:break-word}
+.m{font-size:12px;color:var(--sub);margin:2px 0;word-break:break-all}
+.n{font-size:13px;white-space:pre-wrap;word-break:break-word}
+.acts{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.acts button{font-size:12px;padding:3px 7px}
+.pri{font-size:11px;padding:1px 6px;border-radius:9px;border:1px solid var(--bd)}
+.empty{font-size:12px;color:var(--sub)}
+.sug{display:none;position:absolute;left:0;right:0;top:100%;z-index:10;background:var(--card);border:1px solid var(--bd);border-radius:6px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.si{padding:7px 8px;cursor:pointer;word-break:break-all}.si.on{background:var(--ac);color:#fff}
+</style>
+</head>
+<body>
+<h1>🗂 開発メモ / TODOボード</h1>
+
+<div class="panel">
+  <div class="row">
+    <input type="text" id="title" placeholder="タイトル(例: ダイスの確率がおかしい)">
+    <select id="kind"><option value="todo">TODO</option><option value="bug">バグ</option><option value="idea">アイデア</option><option value="note">メモ</option></select>
+    <select id="pri"><option value="2">優先:中</option><option value="3">優先:高</option><option value="1">優先:低</option></select>
+  </div>
+  <div class="row" style="position:relative">
+  <input type="text" id="loc" placeholder="ソース箇所(例: item と打つと候補が出ます。行番号は :120)" autocomplete="off">
+  <div id="sug" class="sug"></div>
+</div>
+<div class="row">
+  <button id="bf">ファイル登録</button><button id="bd">フォルダ登録</button><button id="fclr">登録クリア</button><span class="m" id="fc"></span>
+  <input type="file" id="pf" multiple accept=".c,.cc,.cpp,.cxx,.h,.hh,.hpp,.hxx,.inl,.ipp,.py,.js,.ts,.cs" hidden>
+  <input type="file" id="pd" webkitdirectory multiple hidden>
+</div>
+  <textarea id="note" rows="2" placeholder="詳細メモ(任意)"></textarea>
+  <div class="row" style="margin-top:6px"><button class="p" id="add">追加</button></div>
+</div>
+
+<div class="row">
+  <input type="text" id="q" placeholder="🔍 検索">
+  <select id="fk"><option value="">全種類</option><option value="todo">TODO</option><option value="bug">バグ</option><option value="idea">アイデア</option><option value="note">メモ</option></select>
+  <button id="copy">Claude用にコピー</button>
+  <button id="exp">書き出し</button>
+  <button id="imp">読み込み</button>
+</div>
+<textarea id="io" rows="3" placeholder="書き出し/読み込み用(JSONをここに貼って「読み込み」)" style="display:none;margin-bottom:8px"></textarea>
+
+<div class="board" id="board"></div>
+
+<script>
+const KEY="devboard-v1";
+const COLS=[["todo","未着手"],["doing","作業中"],["done","完了"]];
+const KL={todo:"TODO",bug:"バグ",idea:"アイデア",note:"メモ"};
+let items=[];
+try{items=JSON.parse(localStorage.getItem(KEY)||"[]")}catch(e){items=[]}
+const $=id=>document.getElementById(id);
+function save(){try{localStorage.setItem(KEY,JSON.stringify(items))}catch(e){}}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function render(){
+  const q=$("q").value.toLowerCase(),fk=$("fk").value;
+  $("board").innerHTML=COLS.map(([k,name])=>{
+    const list=items.filter(i=>i.status===k&&(!fk||i.kind===fk)&&(!q||(i.title+i.loc+i.note).toLowerCase().includes(q)))
+      .sort((a,b)=>b.pri-a.pri);
+    return `<div class="col"><h2>${name} (${list.length})</h2>`+
+      (list.map(i=>`<div class="card ${i.kind}"><div class="t">${esc(i.title)}</div>
+      <div class="m"><span class="pri">${KL[i.kind]}</span> <span class="pri">優先${["","低","中","高"][i.pri]}</span>${i.loc?" 📍"+esc(i.loc):""}</div>
+      ${i.note?`<div class="n">${esc(i.note)}</div>`:""}
+      <div class="acts">${COLS.filter(c=>c[0]!==k).map(c=>`<button onclick="mv(${i.id},'${c[0]}')">→${c[1]}</button>`).join("")}
+      <button onclick="ed(${i.id})">編集</button><button onclick="rm(${i.id})">削除</button></div></div>`).join("")||'<div class="empty">なし</div>')+"</div>";
+  }).join("");
+}
+function mv(id,s){const i=items.find(x=>x.id===id);if(i){i.status=s;save();render()}}
+function rm(id){if(confirm("削除しますか?")){items=items.filter(x=>x.id!==id);save();render()}}
+function ed(id){const i=items.find(x=>x.id===id);if(!i)return;
+  const t=prompt("タイトル",i.title);if(t===null)return;
+  const l=prompt("ソース箇所",i.loc);if(l===null)return;
+  const n=prompt("メモ",i.note);if(n===null)return;
+  i.title=t||i.title;i.loc=l;i.note=n;save();render()}
+$("add").onclick=()=>{
+  const t=$("title").value.trim();if(!t)return;
+  items.push({id:Date.now(),title:t,kind:$("kind").value,pri:+$("pri").value,loc:$("loc").value.trim(),note:$("note").value.trim(),status:"todo"});
+  ["title","loc","note"].forEach(k=>$(k).value="");save();render()};
+$("q").oninput=render;$("fk").onchange=render;
+$("exp").onclick=()=>{$("io").style.display="block";$("io").value=JSON.stringify(items,null,1);$("io").select()};
+$("imp").onclick=()=>{
+  if($("io").style.display==="none"){$("io").style.display="block";$("io").value="";return}
+  try{const a=JSON.parse($("io").value);if(Array.isArray(a)){items=a;save();render();$("io").style.display="none"}}catch(e){alert("JSONが正しくありません")}};
+$("copy").onclick=async()=>{
+  const open=items.filter(i=>i.status!=="done"&&(i.kind==="bug"||i.kind==="todo"));
+  const txt="【未解決の問題・TODO】\n"+open.map(i=>`- [${KL[i.kind]}/優先${["","低","中","高"][i.pri]}] ${i.title}${i.loc?" ("+i.loc+")":""}${i.note?"\n  "+i.note.replace(/\n/g,"\n  "):""}`).join("\n");
+  try{await navigator.clipboard.writeText(txt);$("copy").textContent="コピーしました ✓"}catch(e){$("io").style.display="block";$("io").value=txt;$("io").select()}
+  setTimeout(()=>$("copy").textContent="Claude用にコピー",1500)};
+const FKEY="devboard-files-v1";
+let files=[];
+try{files=JSON.parse(localStorage.getItem(FKEY)||"[]")}catch(e){files=[]}
+const EXT=/\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|py|js|ts|cs)$/i;
+function fcount(){$("fc").textContent=files.length?"登録: "+files.length+"件":"未登録"}
+function addFiles(list){
+  const set=new Set(files);
+  for(const f of list){const p=f.webkitRelativePath||f.name;if(EXT.test(p))set.add(p)}
+  files=[...set].sort();
+  try{localStorage.setItem(FKEY,JSON.stringify(files))}catch(e){}
+  fcount();
+}
+$("bf").onclick=()=>$("pf").click();
+$("bd").onclick=()=>$("pd").click();
+$("pf").onchange=e=>{addFiles(e.target.files);e.target.value=""};
+$("pd").onchange=e=>{addFiles(e.target.files);e.target.value=""};
+$("fclr").onclick=()=>{if(confirm("登録したファイル名を全て消しますか?")){files=[];try{localStorage.removeItem(FKEY)}catch(e){}fcount()}};
+let cur=[],sel=0;
+const base=p=>p.slice(p.lastIndexOf("/")+1).toLowerCase();
+function hl(){[...$("sug").children].forEach((d,i)=>d.classList.toggle("on",i===sel))}
+function suggest(){
+  const v=$("loc").value,ci=v.indexOf(":"),q=(ci<0?v:v.slice(0,ci)).trim().toLowerCase(),box=$("sug");
+  if(!q||!files.length){box.style.display="none";cur=[];return}
+  cur=files.filter(p=>p.toLowerCase().includes(q)).sort((a,b)=>{
+    const x=base(a).startsWith(q)?0:1,y=base(b).startsWith(q)?0:1;return x-y||a.localeCompare(b)}).slice(0,8);
+  sel=0;
+  box.innerHTML=cur.map((p,i)=>'<div class="si" data-i="'+i+'">'+esc(p)+'</div>').join("");
+  box.style.display=cur.length?"block":"none";
+  hl();
+}
+function pick(i){
+  const v=$("loc").value,ci=v.indexOf(":");
+  if(!cur[i])return;
+  $("loc").value=cur[i]+(ci<0?"":v.slice(ci));
+  $("sug").style.display="none";
+}
+$("loc").oninput=suggest;
+$("loc").onfocus=suggest;
+$("loc").onblur=()=>setTimeout(()=>{$("sug").style.display="none"},150);
+$("loc").onkeydown=e=>{
+  if($("sug").style.display!=="block")return;
+  if(e.key==="ArrowDown"){e.preventDefault();sel=(sel+1)%cur.length;hl()}
+  else if(e.key==="ArrowUp"){e.preventDefault();sel=(sel-1+cur.length)%cur.length;hl()}
+  else if(e.key==="Enter"||e.key==="Tab"){e.preventDefault();pick(sel)}
+  else if(e.key==="Escape"){$("sug").style.display="none"}
+};
+$("sug").onpointerdown=e=>{const d=e.target.closest(".si");if(d){e.preventDefault();pick(+d.dataset.i)}};
+fcount();
+render();
+</script>
+</body>
+</html>
